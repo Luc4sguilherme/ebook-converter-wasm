@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Regression Test Document</title>
+    <style>
+        body { font-family: serif; font-size: 12pt; line-height: 1.5; }
+        h1 { font-size: 24pt; text-align: center; }
+        h2 { font-size: 18pt; }
+        h3 { font-size: 14pt; }
+        .emphasis { font-style: italic; }
+        .strong { font-weight: bold; }
+        blockquote { margin-left: 2em; font-style: italic; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #333; padding: 8px; }
+        th { background-color: #eee; font-weight: bold; }
+        pre { background-color: #f4f4f4; padding: 10px; }
+        .chapter { page-break-before: always; }
+    </style>
+</head>
+<body>
+
+<h1>The Art of Document Conversion</h1>
+<p style="text-align: center;"><em>A Regression Test Document</em></p>
+<p style="text-align: center;">By Test Author</p>
+
+<hr>
+
+<h2>Chapter 1: Text Formatting</h2>
+
+<p>This document tests various formatting elements to ensure conversion quality.
+It includes <b>bold text</b>, <i>italic text</i>, <u>underlined text</u>,
+and <s>strikethrough text</s>. Formatting can also be <b><i>combined for bold italic</i></b>.</p>
+
+<p>Superscript works like this: E = mc<sup>2</sup> and subscript: H<sub>2</sub>O is water.</p>
+
+<h3>1.1 Paragraphs and Alignment</h3>
+
+<p>This is a left-aligned paragraph with enough text to demonstrate proper word wrapping
+and paragraph spacing in the converted output. The quick brown fox jumps over the lazy dog.
+Lorem ipsum dolor sit amet, consectetur adipiscing elit.</p>
+
+<p style="text-align: center;">This paragraph is centered.</p>
+
+<p style="text-align: right;">This paragraph is right-aligned.</p>
+
+<h3>1.2 Special Characters</h3>
+
+<p>Smart quotes: "Hello, World!" and 'single quotes' should be preserved.
+Em dash — and en dash – are important typographic elements.
+Ellipsis… and bullet points • should also work correctly.</p>
+
+<p>International characters: café, naïve, résumé, über, señor, Ångström.</p>
+
+<p>Mathematical symbols: ± × ÷ ≤ ≥ ≠ ≈ © ® ™ § ¶ °</p>
+
+<h2>Chapter 2: Lists</h2>
+
+<h3>2.1 Unordered Lists</h3>
+
+<ul>
+    <li>First item in the unordered list</li>
+    <li>Second item with <b>bold text</b></li>
+    <li>Third item with <i>italic text</i></li>
+    <li>Fourth item with a longer description that should wrap properly
+        when rendered in the output format</li>
+</ul>
+
+<h3>2.2 Ordered Lists</h3>
+
+<ol>
+    <li>First numbered item</li>
+    <li>Second numbered item</li>
+    <li>Third numbered item with <b>formatting</b></li>
+    <li>Fourth numbered item</li>
+</ol>
+
+<h3>2.3 Nested Lists</h3>
+
+<ul>
+    <li>Top level item
+        <ul>
+            <li>Nested item one</li>
+            <li>Nested item two</li>
+        </ul>
+    </li>
+    <li>Another top level item
+        <ol>
+            <li>Nested ordered one</li>
+            <li>Nested ordered two</li>
+        </ol>
+    </li>
+</ul>
+
+<h3>2.4 Definition Lists</h3>
+
+<dl>
+    <dt>EPUB</dt>
+    <dd>Electronic Publication, a widely-used ebook format</dd>
+    <dt>PDF</dt>
+    <dd>Portable Document Format, preserves layout and formatting</dd>
+    <dt>MOBI</dt>
+    <dd>Mobipocket format, used by older Kindle devices</dd>
+</dl>
+
+<h2>Chapter 3: Tables</h2>
+
+<table>
+    <thead>
+        <tr>
+            <th>Format</th>
+            <th>Type</th>
+            <th>Features</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>EPUB</td>
+            <td>Reflowable</td>
+            <td>Most widely supported format</td>
+        </tr>
+        <tr>
+            <td>PDF</td>
+            <td>Fixed layout</td>
+            <td>Preserves exact formatting</td>
+        </tr>
+        <tr>
+            <td>DOCX</td>
+            <td>Word processing</td>
+            <td>Editable document format</td>
+        </tr>
+        <tr>
+            <td>FB2</td>
+            <td>Structured XML</td>
+            <td>Popular in Eastern Europe</td>
+        </tr>
+        <tr>
+            <td>MOBI</td>
+            <td>Reflowable</td>
+            <td>Amazon Kindle format</td>
+        </tr>
+    </tbody>
+</table>
+
+<h2>Chapter 4: Block Elements</h2>
+
+<h3>4.1 Blockquotes</h3>
+
+<blockquote>
+    <p>The best way to predict the future is to invent it. — Alan Kay</p>
+</blockquote>
+
+<blockquote>
+    <p>Any sufficiently advanced technology is indistinguishable from magic. — Arthur C. Clarke</p>
+</blockquote>
+
+<h3>4.2 Preformatted Text</h3>
+
+<pre>
+def convert_ebook(input_path, output_path):
+    """Convert an ebook from one format to another."""
+    plumber = Plumber(input_path, output_path)
+    plumber.run()
+    return output_path
+</pre>
+
+<h3>4.3 Code Inline</h3>
+
+<p>Use the <code>convert()</code> function to transform documents.
+The <code>Plumber</code> class handles the conversion pipeline.</p>
+
+<h2>Chapter 5: Links</h2>
+
+<p>Visit <a href="https://calibre-ebook.com/">Calibre</a> for more information
+about ebook management and conversion.</p>
+
+<p>The <a href="https://www.w3.org/TR/epub-33/">EPUB specification</a> defines
+the standard for electronic publications.</p>
+
+<h2>Chapter 6: Content Verification</h2>
+
+<p>This section contains specific text markers that regression tests can search for
+to verify content preservation:</p>
+
+<p>MARKER_BOLD: <b>This text must be bold</b></p>
+<p>MARKER_ITALIC: <i>This text must be italic</i></p>
+<p>MARKER_HEADING: The heading "Chapter 6: Content Verification" must appear</p>
+<p>MARKER_TABLE: The table must contain "EPUB", "PDF", "DOCX", "FB2", "MOBI"</p>
+<p>MARKER_LIST: The list must contain "First item in the unordered list"</p>
+<p>MARKER_BLOCKQUOTE: The blockquote must contain "Alan Kay"</p>
+<p>MARKER_PREFORMATTED: The code block must contain "convert_ebook"</p>
+<p>MARKER_LINK: The link to "calibre-ebook.com" must be present</p>
+<p>MARKER_SPECIAL: café, résumé, naïve must be preserved</p>
+<p>MARKER_SUPERSCRIPT: E = mc2 with superscript must be present</p>
+
+<hr>
+
+<p style="text-align: center;"><i>End of Regression Test Document</i></p>
+
+</body>
+</html>

@@ -1,0 +1,7 @@
+DATA_DIR_NAME = '.caldata'
+DATA_FILE_PATTERN = '{}'
+COVER_FILE_NAME = 'cover.jpg'
+METADATA_FILE_NAME = 'metadata.opf'
+NOTES_DIR_NAME = '.calnotes'
+TRASH_DIR_NAME = '.caltrash'
+NO_SEARCH_LINK = 'calibre://no-search-link'

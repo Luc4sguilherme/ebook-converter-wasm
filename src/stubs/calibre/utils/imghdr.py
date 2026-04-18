@@ -1,0 +1,211 @@
+"""Recognize image file formats and sizes based on their first few bytes."""
+import os
+from struct import error, unpack
+
+from calibre.utils.speedups import ReadOnlyFileBuffer
+
+HSIZE = 120
+
+def what(file, h=None):
+    """Recognize image headers"""
+    if h is None:
+        if isinstance(file, (str, bytes)):
+            with open(file, 'rb') as f:
+                h = f.read(HSIZE)
+        else:
+            location = file.tell()
+            h = file.read(HSIZE)
+            file.seek(location)
+    if isinstance(h, bytes):
+        h = memoryview(h)
+    for tf in tests:
+        res = tf(h)
+        if res:
+            return res
+
+    if h[:2] == b'\xff\xd8':
+        return 'jpeg'
+    return None
+
+def identify(src):
+    """Recognize file format and sizes. Returns format, width, height.
+    width and height will be -1 if not found and fmt will be None if the
+    image is not recognized."""
+    needs_close = False
+
+    if isinstance(src, str):
+        stream = open(src, 'rb')
+        needs_close = True
+    elif isinstance(src, bytes):
+        stream = ReadOnlyFileBuffer(src)
+    else:
+        stream = src
+    try:
+        return _identify(stream)
+    finally:
+        if needs_close:
+            stream.close()
+
+def _identify(stream):
+    width = height = -1
+
+    pos = stream.tell()
+    head = stream.read(HSIZE)
+    stream.seek(pos)
+    fmt = what(None, head)
+
+    if fmt in {'jpeg', 'gif', 'png', 'jpeg2000'}:
+        size = len(head)
+        if fmt == 'png':
+            s = head[16:24] if size >= 24 and head[12:16] == b'IHDR' else head[8:16]
+            try:
+                width, height = unpack(b'>LL', s)
+            except error:
+                return fmt, width, height
+        elif fmt == 'jpeg':
+            pos = stream.tell()
+            try:
+                height, width = jpeg_dimensions(stream)
+            except Exception:
+                return fmt, width, height
+            finally:
+                stream.seek(pos)
+        elif fmt == 'gif':
+            try:
+                width, height = unpack(b'<HH', head[6:10])
+            except error:
+                return fmt, width, height
+        elif size >= 56 and fmt == 'jpeg2000':
+            try:
+                height, width = unpack(b'>LL', head[48:56])
+            except error:
+                return fmt, width, height
+    return fmt, width, height
+
+tests = []
+
+def test(f):
+    tests.append(f)
+    return f
+
+@test
+def jpeg(h):
+    if h[6:10] in (b'JFIF', b'Exif'):
+        return 'jpeg'
+    if h[:2] == b'\xff\xd8':
+        q = h[:32].tobytes()
+        if b'JFIF' in q or b'8BIM' in q:
+            return 'jpeg'
+
+def jpeg_dimensions(stream):
+    stream.seek(2, os.SEEK_CUR)
+
+    def read(n):
+        ans = stream.read(n)
+        if len(ans) != n:
+            raise ValueError('Truncated JPEG data')
+        return ans
+
+    def read_byte():
+        return read(1)[0]
+
+    x = None
+    while True:
+        while x != 0xff:
+            x = read_byte()
+        marker = 0xff
+        while marker == 0xff:
+            marker = read_byte()
+        q = marker
+        if 0xc0 <= q <= 0xcf and q not in {0xc4, 0xcc}:
+            stream.seek(3, os.SEEK_CUR)
+            return unpack(b'>HH', read(4))
+        elif 0xd8 <= q <= 0xda:
+            break
+        elif q == 0:
+            return -1, -1
+        elif q == 0x01 or 0xd0 <= q <= 0xd7:
+            continue
+        else:
+            size = unpack(b'>H', read(2))[0]
+            stream.seek(size - 2, os.SEEK_CUR)
+
+    return -1, -1
+
+@test
+def png(h):
+    if h[:8] == b'\211PNG\r\n\032\n':
+        return 'png'
+
+@test
+def gif(h):
+    if h[:6] in (b'GIF87a', b'GIF89a'):
+        return 'gif'
+
+@test
+def tiff(h):
+    if h[:2] in (b'MM', b'II'):
+        if h[2:4] == b'\xbc\x01':
+            return 'jxr'
+        return 'tiff'
+
+@test
+def webp(h):
+    if h[:4] == b'RIFF' and h[8:12] == b'WEBP':
+        return 'webp'
+
+@test
+def rgb(h):
+    if h[:2] == b'\001\332':
+        return 'rgb'
+
+@test
+def pbm(h):
+    if len(h) >= 3 and \
+        h[0] == b'P' and h[1] in b'14' and h[2] in b' \t\n\r':
+        return 'pbm'
+
+@test
+def pgm(h):
+    if len(h) >= 3 and \
+        h[0] == b'P' and h[1] in b'25' and h[2] in b' \t\n\r':
+        return 'pgm'
+
+@test
+def ppm(h):
+    if len(h) >= 3 and \
+        h[0] == b'P' and h[1] in b'36' and h[2] in b' \t\n\r':
+        return 'ppm'
+
+@test
+def rast(h):
+    if h[:4] == b'\x59\xA6\x6A\x95':
+        return 'rast'
+
+@test
+def xbm(h):
+    s = b'#define '
+    if h[:len(s)] == s:
+        return 'xbm'
+
+@test
+def bmp(h):
+    if h[:2] == b'BM':
+        return 'bmp'
+
+@test
+def emf(h):
+    if h[:4] == b'\x01\0\0\0' and h[40:44] == b' EMF':
+        return 'emf'
+
+@test
+def jpeg2000(h):
+    if h[:12] == b'\x00\x00\x00\x0cjP  \r\n\x87\n':
+        return 'jpeg2000'
+
+@test
+def svg(h):
+    if h[:4] == b'<svg' or (h[:2] == b'<?' and h[2:5].tobytes().lower() == b'xml' and b'<svg' in h.tobytes()):
+        return 'svg'
+
+tests = tuple(tests)

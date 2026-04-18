@@ -1,0 +1,247 @@
+diff -ruN original/calibre/customize/__init__.py patched/calibre/customize/__init__.py
+--- calibre/customize/__init__.py	2026-04-14 19:25:47.964856262 -0300
++++ calibre/customize/__init__.py	2026-04-15 17:57:35.863869511 -0300
+@@ -1,3 +1,4 @@
++from __future__ import annotations
+ __license__   = 'GPL v3'
+ __copyright__ = '2008, Kovid Goyal <kovid at kovidgoyal.net>'
+ 
+diff -ruN original/calibre/ebooks/conversion/plugins/snb_output.py patched/calibre/ebooks/conversion/plugins/snb_output.py
+--- calibre/ebooks/conversion/plugins/snb_output.py	2026-04-14 19:25:48.008856265 -0300
++++ calibre/ebooks/conversion/plugins/snb_output.py	2026-04-15 17:57:35.863869511 -0300
+@@ -221,7 +221,7 @@
+     def HandleImage(self, imageData, imagePath):
+         from calibre.utils.img import image_from_data, image_to_data, resize_image
+         img = image_from_data(imageData)
+-        x, y = img.width(), img.height()
++        x, y = img.width, img.height
+         if self.opts:
+             if self.opts.snb_full_screen:
+                 SCREEN_X, SCREEN_Y = self.opts.output_profile.screen_size
+diff -ruN original/calibre/ebooks/docx/writer/images.py patched/calibre/ebooks/docx/writer/images.py
+--- calibre/ebooks/docx/writer/images.py	2026-04-14 19:25:48.012856265 -0300
++++ calibre/ebooks/docx/writer/images.py	2026-04-15 17:57:35.863869511 -0300
+@@ -198,7 +198,7 @@
+             num += 1
+             fname = base + str(num)
+         self.seen_filenames.add(fname.lower())
+-        fname += os.extsep + fmt.lower()
++        fname += os.extsep + (fmt or 'png').lower()
+         return fname
+ 
+     def serialize(self, images_map):
+@@ -245,8 +245,9 @@
+ 
+     def write_cover_block(self, body, cover_image):
+         makeelement, namespaces = self.document_relationships.namespace.makeelement, self.document_relationships.namespace.namespaces
+-        pbb = body[0].xpath('//*[local-name()="pageBreakBefore"]')[0]
+-        pbb.set('{{{}}}val'.format(namespaces['w']), 'on')
++        pbb_list = body[0].xpath('//*[local-name()="pageBreakBefore"]')
++        if pbb_list:
++            pbb_list[0].set('{{{}}}val'.format(namespaces['w']), 'on')
+         p = makeelement(body, 'w:p', append=False)
+         body.insert(0, p)
+         r = makeelement(p, 'w:r')
+diff -ruN original/calibre/ebooks/docx/writer/links.py patched/calibre/ebooks/docx/writer/links.py
+--- calibre/ebooks/docx/writer/links.py	2026-04-14 19:25:48.012856265 -0300
++++ calibre/ebooks/docx/writer/links.py	2026-04-15 17:57:35.863869511 -0300
+@@ -163,8 +163,9 @@
+             self.toc[-1].is_last = True
+ 
+     def serialize_toc(self, body, primary_heading_style):
+-        pbb = body[0].xpath('//*[local-name()="pageBreakBefore"]')[0]
+-        pbb.set('{{{}}}val'.format(self.namespace.namespaces['w']), 'on')
++        pbb_list = body[0].xpath('//*[local-name()="pageBreakBefore"]')
++        if pbb_list:
++            pbb_list[0].set('{{{}}}val'.format(self.namespace.namespaces['w']), 'on')
+         for block in reversed(self.toc):
+             block.serialize(body, self.namespace.makeelement)
+         title = __('Table of Contents')
+diff -ruN original/calibre/ebooks/docx/writer/styles.py patched/calibre/ebooks/docx/writer/styles.py
+--- calibre/ebooks/docx/writer/styles.py	2026-04-14 19:25:48.012856265 -0300
++++ calibre/ebooks/docx/writer/styles.py	2026-04-15 17:57:35.863869511 -0300
+@@ -157,7 +157,7 @@
+             getattr(self, x) for x in self.ALL_PROPS))
+ 
+     def makeelement(self, parent, name, **attrs):
+-        return parent.makeelement(self.w(name), **{self.w(k):v for k, v in attrs.items()})
++        return parent.makeelement(self.w(name), **{self.w(k):v for k, v in attrs.items() if v is not None})
+ 
+     def __hash__(self):
+         return self._hash
+diff -ruN original/calibre/ebooks/lit/lzx.py patched/calibre/ebooks/lit/lzx.py
+--- calibre/ebooks/lit/lzx.py	2026-04-14 19:25:48.016856265 -0300
++++ calibre/ebooks/lit/lzx.py	2026-04-15 17:57:35.863869511 -0300
+@@ -5,7 +5,10 @@
+ __license__   = 'GPL v3'
+ __copyright__ = '2008, Marshall T. Vandegrift <llasram@gmail.com>'
+ 
+-from calibre_extensions import lzx as _lzx
++try:
++    from calibre_extensions import lzx as _lzx
++except ImportError:
++    lzx as _lzx = None
+ 
+ __all__ = ['Compressor', 'Decompressor', 'LZXError']
+ 
+diff -ruN original/calibre/ebooks/lit/reader.py patched/calibre/ebooks/lit/reader.py
+--- calibre/ebooks/lit/reader.py	2026-04-14 19:25:48.016856265 -0300
++++ calibre/ebooks/lit/reader.py	2026-04-15 17:57:35.863869511 -0300
+@@ -20,7 +20,11 @@
+ from calibre.ebooks.lit.maps import HTML_MAP, OPF_MAP
+ from calibre.ebooks.oeb.base import urlnormalize, xpath
+ from calibre.ebooks.oeb.reader import OEBReader
+-from calibre_extensions import lzx, msdes
++try:
++    from calibre_extensions import lzx, msdes
++except ImportError:
++    lzx = None
++    msdes = None
+ from polyglot.urllib import unquote as urlunquote
+ 
+ __all__ = ['LitReader']
+diff -ruN original/calibre/ebooks/lit/writer.py patched/calibre/ebooks/lit/writer.py
+--- calibre/ebooks/lit/writer.py	2026-04-14 19:25:48.020856265 -0300
++++ calibre/ebooks/lit/writer.py	2026-04-15 17:57:35.863869511 -0300
+@@ -26,7 +26,10 @@
+ from calibre.ebooks.lit.reader import DirectoryEntry
+ from calibre.ebooks.oeb.base import CSS_MIME, OEB_DOCS, OEB_STYLES, OPF_MIME, XHTML_MIME, XML, XML_NS, prefixname, urlnormalize
+ from calibre.ebooks.oeb.stylizer import Stylizer
+-from calibre_extensions import msdes
++try:
++    from calibre_extensions import msdes
++except ImportError:
++    msdes = None
+ from polyglot.urllib import unquote
+ 
+ __all__ = ['LitWriter']
+diff -ruN original/calibre/ebooks/mobi/mobiml.py patched/calibre/ebooks/mobi/mobiml.py
+--- calibre/ebooks/mobi/mobiml.py	2026-04-14 19:25:48.028856267 -0300
++++ calibre/ebooks/mobi/mobiml.py	2026-04-15 17:57:35.863869511 -0300
+@@ -449,7 +449,7 @@
+             if valign in ('top', 'bottom', 'middle'):
+                 istate.attrib['align'] = valign
+             for prop in ('width', 'height'):
+-                if cssdict[prop] != 'auto':
++                if cssdict.get(prop, 'auto') != 'auto':
+                     value = style[prop]
+                     if value == getattr(self.profile, prop):
+                         result = '100%'
+diff -ruN original/calibre/ebooks/oeb/transforms/rasterize.py patched/calibre/ebooks/oeb/transforms/rasterize.py
+--- calibre/ebooks/oeb/transforms/rasterize.py	2026-04-14 19:25:48.040856267 -0300
++++ calibre/ebooks/oeb/transforms/rasterize.py	2026-04-15 17:57:35.863869511 -0300
+@@ -12,13 +12,20 @@
+ from urllib.parse import urldefrag
+ 
+ from lxml import etree
+-from qt.core import QBuffer, QByteArray, QColor, QImage, QIODevice, QPainter, QSvgRenderer, Qt
+ 
+ from calibre import guess_type
+ from calibre.ebooks.oeb.base import PNG_MIME, SVG_MIME, XHTML, XLINK, urlnormalize, xml2str, xpath
+ from calibre.ebooks.oeb.stylizer import Stylizer
+ from calibre.utils.imghdr import what
+ 
++
++try:
++    from qt.core import (QByteArray, QSvgRenderer, QImage, QPainter,
++                          QColor, QBuffer, QIODevice, Qt)
++    HAS_QT = True
++except ImportError:
++    HAS_QT = False
++
+ IMAGE_TAGS = {XHTML('img'), XHTML('object')}
+ KEEP_ATTRS = {'class', 'style', 'width', 'height', 'align'}
+ 
+@@ -73,8 +80,11 @@
+     def __init__(self, base_css='', save_svg_originals=False):
+         self.base_css = base_css
+         self.save_svg_originals = save_svg_originals
+-        from calibre.gui2 import must_use_qt
+-        must_use_qt()
++        try:
++            from calibre.gui2 import must_use_qt
++            must_use_qt()
++        except ImportError:
++            pass
+ 
+     @classmethod
+     def config(cls, cfg):
+@@ -85,6 +95,15 @@
+         return cls()
+ 
+     def __call__(self, oeb, context):
++        if not HAS_QT:
++            self.stylizer_cache = {}
++            self.oeb = oeb
++            self.opts = context
++            self.profile = context.dest
++            self.images = {}
++            self.svg_originals = {}
++            oeb.logger.warning('Qt not available, skipping SVG rasterization')
++            return
+         oeb.logger.info('Rasterizing SVG images...')
+         self.stylizer_cache = {}
+         self.oeb = oeb
+@@ -97,6 +116,9 @@
+         self.rasterize_cover()
+ 
+     def rasterize_svg(self, elem, width=0, height=0, format='PNG'):
++        if not HAS_QT:
++            self.oeb.logger.warning('Qt not available, skipping SVG rasterization')
++            return b''
+         view_box = elem.get('viewBox', elem.get('viewbox', None))
+         sizes = None
+         logger = self.oeb.logger
+@@ -204,6 +226,9 @@
+                 img.attrib[prop] = elem.attrib[prop]
+ 
+     def rasterize_external(self, elem, style, item, svgitem):
++        if not HAS_QT:
++            self.oeb.logger.warning('Qt not available, skipping external SVG rasterization')
++            return
+         width = style['width']
+         height = style['height']
+         width = (width / 72) * self.profile.dpi
+diff -ruN original/calibre/ebooks/pdf/reflow.py patched/calibre/ebooks/pdf/reflow.py
+--- calibre/ebooks/pdf/reflow.py	2026-04-14 19:25:48.044856267 -0300
++++ calibre/ebooks/pdf/reflow.py	2026-04-15 17:57:35.867869511 -0300
+@@ -1889,7 +1889,7 @@
+               or head_match1[i] > pages_to_scan \
+               or head_match2[i] > pages_to_scan:
+                 head_ind = i  # Remember the last matching line
+-        if self.pages[head_page].texts \
++        if head_page < len(self.pages) and self.pages[head_page].texts \
+           and (head_match[head_ind] > pages_to_scan \
+             or head_match1[head_ind] > pages_to_scan \
+             or head_match2[head_ind] > pages_to_scan):
+diff -ruN original/calibre/utils/zipfile.py patched/calibre/utils/zipfile.py
+--- calibre/utils/zipfile.py	2026-04-14 19:25:48.168856275 -0300
++++ calibre/utils/zipfile.py	2026-04-15 17:57:35.863869511 -0300
+@@ -12,9 +12,14 @@
+ import tempfile
+ import time
+ from compression import zlib
+-from concurrent.futures import ThreadPoolExecutor
++# ThreadPoolExecutor disabled for WASM
+ from contextlib import closing, suppress
+-from threading import Lock
++# threading.Lock disabled for WASM
++class Lock:
++    def acquire(self): pass
++    def release(self): pass
++    def __enter__(self): return self
++    def __exit__(self, *a): pass
+ from zlib import crc32
+ 
+ from calibre import sanitize_file_name
+@@ -1159,8 +1164,8 @@
+         lock = Lock()
+         def do_one(a):
+             return self._extract_member_to(*a, lock=lock)
+-        with ThreadPoolExecutor(max_workers=12, thread_name_prefix='ZipFile-') as e:
+-            tuple(e.map(do_one, args))
++        for a in args:
++            do_one(a)
+ 
+     def _get_targetpath(self, member: ZipInfo, targetpath: str) -> str:
+         # build the destination pathname, replacing
