@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <!-- coi-serviceworker injects COOP/COEP headers required by SharedArrayBuffer
+         (used by Pyodide/WASM threads). On GitHub Pages, place coi-serviceworker.js
+         at the root of the deployed site. Locally it is served from the repo root. -->
+    <script src="/coi-serviceworker.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ebook-converter-wasm — Ebook Converter</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 720px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+            color: #1a1a2e;
+            background: #f5f5f7;
+        }
+        h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
+        .subtitle { color: #666; margin-bottom: 2rem; font-size: 0.9rem; }
+        .card {
+            background: #fff;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        }
+        label { display: block; font-weight: 600; margin-bottom: 0.5rem; }
+        input[type="file"] {
+            display: block;
+            width: 100%;
+            padding: 0.75rem;
+            border: 2px dashed #ddd;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-bottom: 1rem;
+        }
+        input[type="file"]:hover { border-color: #4a90d9; }
+        select, button {
+            padding: 0.6rem 1.2rem;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            font-size: 0.95rem;
+        }
+        select { width: 100%; margin-bottom: 1rem; }
+        button {
+            background: #4a90d9;
+            color: #fff;
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+            width: 100%;
+            padding: 0.8rem;
+        }
+        button:hover { background: #357abd; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        .progress {
+            margin-top: 1rem;
+            display: none;
+        }
+        .progress-bar {
+            height: 6px;
+            background: #eee;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%;
+            background: #4a90d9;
+            width: 0%;
+            transition: width 0.3s;
+        }
+        .progress-text {
+            font-size: 0.85rem;
+            color: #666;
+            margin-top: 0.3rem;
+        }
+        .result {
+            display: none;
+            margin-top: 1rem;
+            padding: 1rem;
+            background: #e8f5e9;
+            border-radius: 8px;
+        }
+        .result a {
+            color: #2e7d32;
+            font-weight: 600;
+            text-decoration: none;
+        }
+        .error {
+            display: none;
+            margin-top: 1rem;
+            padding: 1rem;
+            background: #fce4ec;
+            border-radius: 8px;
+            color: #c62828;
+        }
+        .formats { font-size: 0.85rem; color: #888; margin-top: 0.5rem; }
+    </style>
+</head>
+<body>
+    <h1>📚 ebook-converter-wasm</h1>
+    <p class="subtitle">Convert ebooks directly in your browser — no server required</p>
+
+    <div class="card">
+        <label for="inputFile">Select ebook file</label>
+        <input type="file" id="inputFile"
+               accept=".azw3,.docx,.epub,.fb2,.html,.htmlz,.lrf,.mobi,.odt,.pdb,.pdf,.rb,.rtf,.tcr,.txt,.txtz">
+        <p class="formats">
+            Supported input: azw3, docx, epub, fb2, html, htmlz, lrf, mobi, odt, pdb, pdf, rb, rtf, tcr, txt, txtz
+        </p>
+    </div>
+
+    <div class="card">
+        <label for="outputFormat">Output format</label>
+        <select id="outputFormat">
+            <option value="azw3">AZW3</option>
+            <option value="docx">DOCX</option>
+            <option value="epub">EPUB</option>
+            <option value="fb2">FB2</option>
+            <option value="html">HTML</option>
+            <option value="htmlz">HTMLZ</option>
+            <option value="kepub">KEPUB</option>
+            <option value="lrf">LRF</option>
+            <option value="mobi">MOBI</option>
+            <option value="oeb">OEB</option>
+            <option value="pdb">PDB</option>
+            <option value="pdf">PDF</option>
+            <option value="pmlz">PMLZ</option>
+            <option value="rb">RB</option>
+            <option value="rtf">RTF</option>
+            <option value="snb">SNB</option>
+            <option value="tcr">TCR</option>
+            <option value="txt">TXT</option>
+        </select>
+
+        <button id="convertBtn" disabled>Convert</button>
+
+        <div class="progress" id="progress">
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <p class="progress-text" id="progressText">Initializing...</p>
+        </div>
+
+        <div class="result" id="result">
+            ✅ Conversion complete!
+            <a id="downloadLink" href="#" download>Download converted file</a>
+        </div>
+
+        <div class="error" id="error"></div>
+    </div>
+
+    <div class="card" style="font-size: 0.85rem; color: #888;">
+        <p><strong>How it works:</strong> Calibre's ebook conversion engine runs
+        entirely in your browser via WebAssembly. Your files never leave your device.</p>
+        <p style="margin-top: 0.5rem;">
+            <strong>Limitations:</strong>
+            Large files (50MB+) may be slow. Complex formatting may differ
+            from native Calibre.
+        </p>
+    </div>
+
+    <script type="module">
+        const inputEl = document.getElementById('inputFile');
+        const formatEl = document.getElementById('outputFormat');
+        const convertBtn = document.getElementById('convertBtn');
+        const progressEl = document.getElementById('progress');
+        const progressFill = document.getElementById('progressFill');
+        const progressText = document.getElementById('progressText');
+        const resultEl = document.getElementById('result');
+        const downloadLink = document.getElementById('downloadLink');
+        const errorEl = document.getElementById('error');
+
+        let worker = null;
+        let requestId = 0;
+        let selectedFile = null;
+
+        function initWorker() {
+            worker = new Worker('../../dist/browser/worker.mjs', { type: 'module' });
+
+            worker.onmessage = (e) => {
+                const msg = e.data;
+
+                switch (msg.type) {
+                    case 'loaded':
+                        convertBtn.disabled = false;
+                        break;
+
+                    case 'progress':
+                        progressEl.style.display = 'block';
+                        const stages = {
+                            pyodide: 'Loading Python runtime...',
+                            native: 'Loading native libraries...',
+                            packages: 'Installing dependencies...',
+                            calibre: 'Loading Calibre engine...',
+                            converting: 'Converting ebook...',
+                        };
+                        if (msg.stage === 'converting' && msg.message) {
+                            progressText.textContent = `Converting: ${msg.message}`;
+                        } else {
+                            progressText.textContent = stages[msg.stage] || msg.stage;
+                        }
+                        if (msg.pct !== undefined) {
+                            progressFill.style.width = msg.pct + '%';
+                        }
+                        break;
+
+                    case 'result':
+                        progressEl.style.display = 'none';
+                        resultEl.style.display = 'block';
+                        errorEl.style.display = 'none';
+
+                        const blob = new Blob([msg.outputData]);
+                        const url = URL.createObjectURL(blob);
+                        const outName = msg.outputFile || 'output';
+                        downloadLink.href = url;
+                        downloadLink.download = outName;
+                        downloadLink.textContent = `Download ${outName}`;
+                        convertBtn.disabled = false;
+                        break;
+
+                    case 'error':
+                        progressEl.style.display = 'none';
+                        resultEl.style.display = 'none';
+                        errorEl.style.display = 'block';
+                        errorEl.textContent = '❌ ' + msg.error;
+                        convertBtn.disabled = false;
+                        break;
+                }
+            };
+        }
+
+        inputEl.addEventListener('change', (e) => {
+            selectedFile = e.target.files[0];
+            if (selectedFile) {
+                convertBtn.disabled = false;
+            }
+        });
+
+        convertBtn.addEventListener('click', async () => {
+            if (!selectedFile) return;
+
+            convertBtn.disabled = true;
+            resultEl.style.display = 'none';
+            errorEl.style.display = 'none';
+            progressEl.style.display = 'block';
+            progressFill.style.width = '0%';
+            progressText.textContent = 'Reading file...';
+
+            const arrayBuffer = await selectedFile.arrayBuffer();
+            const inputData = new Uint8Array(arrayBuffer);
+
+            const baseName = selectedFile.name.replace(/\.[^.]+$/, '');
+            const outputFile = `${baseName}.${formatEl.value}`;
+
+            if (!worker) initWorker();
+
+            worker.postMessage({
+                type: 'convert',
+                id: ++requestId,
+                inputData,
+                inputName: selectedFile.name,
+                outputFile,
+                options: {},
+            });
+        });
+
+        initWorker();
+    </script>
+</body>
+</html>
