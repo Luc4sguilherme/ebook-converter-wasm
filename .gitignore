@@ -1,0 +1,7 @@
+node_modules/
+tmp/
+dist/
+public/
+*.o
+*.a
+.DS_Store

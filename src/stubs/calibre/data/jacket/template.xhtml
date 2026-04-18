@@ -1,0 +1,46 @@
+<html xmlns="{xmlns}">
+    <head>
+        <title>{title_str}</title>
+        <meta name="calibre-content" content="jacket"/>
+        <style type="text/css">{css}</style>
+    </head>
+    <body>
+        <div class="cbj_banner">
+            <table class="cbj_header">
+            	<tr>
+            		<td class="cbj_title" colspan="2">{title}</td>
+            	</tr>
+                <tr>
+
+                    <td  class="cbj_series" colspan="2">{series.roman}</td>
+                </tr>
+            	<tr>
+            		<td class="cbj_author" colspan="2">{author}</td>
+            	</tr>
+                <tr>
+                	<td class="cbj_pubdata" colspan="2">{publisher} ({pubdate})</td>
+                </tr>
+
+            	<tr>
+            		<td class="cbj_author" colspan="2"><hr class="metadata_divider" /></td>
+            	</tr>
+
+                <tr class="cbj_rating">
+                    <td class="cbj_label">{rating_label}:</td>
+                    <td class="cbj_content">{rating}</td>
+                </tr>
+                <tr class="cbj_tags">
+                    <td class="cbj_label">{tags_label}:</td>
+
+                    <td class="cbj_content">{tags}</td>
+                </tr>
+                <tr data-calibre-jacket-searchable-tags="1" style="color:white; display:none"><td colspan="2">{searchable_tags}</td></tr>
+            </table>
+            <div class="cbj_footer">{footer}</div>
+        </div>
+        <hr class="cbj_kindle_banner_hr" />
+
+        <div class="cbj_comments">{comments}</div>
+    </body>
+</html>
+
