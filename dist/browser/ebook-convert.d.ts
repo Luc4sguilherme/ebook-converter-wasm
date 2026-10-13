@@ -10,16 +10,20 @@ export interface ConvertOptions {
     /** Override book language */
     language?: string;
     /** Base font size in pt */
-    base_font_size?: number;
+    base_font_size?: number | string;
     /** Output profile (e.g. 'kindle', 'tablet') */
     output_profile?: string;
-    /** Strip images from output */
+    /** PDF input only: ignore the images in the PDF */
     no_images?: boolean;
     /** Linearize tables in output */
     linearize_tables?: boolean;
     /** Extra CSS to inject */
     extra_css?: string;
 
+    /**
+     * Any other ebook-convert option, by its command line name with dashes
+     * or underscores. Values are converted to the type of the option.
+     */
     [key: string]: any;
 }
 
@@ -116,3 +120,20 @@ export class EbookConverter {
     /** Release resources */
     destroy(): Promise<void>;
 }
+
+/**
+ * Initialize a converter, convert a single file and release the converter.
+ * @param inputData - Raw bytes of the input file
+ * @param inputName - Input filename, its extension gives the input format
+ * @param outputFormat - Output format, e.g. 'epub'
+ * @param options - Conversion options
+ * @param config - Configuration for the EbookConverter constructor
+ * @returns Raw bytes of the converted file
+ */
+export function convertEbook(
+    inputData: Uint8Array,
+    inputName: string,
+    outputFormat: string,
+    options?: ConvertOptions,
+    config?: EbookConverterConfig
+): Promise<Uint8Array>;
