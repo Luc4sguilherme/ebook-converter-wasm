@@ -40,13 +40,19 @@ fi
 
 cp -r "${CALIBRE_SRC}" "${PKG_DIR}/calibre"
 
-if [ -d "${REFERENCE_DIR}/src/polyglot" ]; then
-    cp -r "${REFERENCE_DIR}/src/polyglot" "${PKG_DIR}/polyglot"
-    echo "  Copied polyglot package"
-elif [ -d "${REFERENCE_DIR}/polyglot" ]; then
-    cp -r "${REFERENCE_DIR}/polyglot" "${PKG_DIR}/polyglot"
-    echo "  Copied polyglot package"
-fi
+# Pure Python packages that live next to calibre in its source tree.
+# calibre ships its own fork of odfpy as the odf package.
+for pkg in polyglot tinycss css_selectors odf; do
+    if [ -d "${REFERENCE_DIR}/src/${pkg}" ]; then
+        cp -r "${REFERENCE_DIR}/src/${pkg}" "${PKG_DIR}/${pkg}"
+        echo "  Copied ${pkg} package"
+    elif [ -d "${REFERENCE_DIR}/${pkg}" ]; then
+        cp -r "${REFERENCE_DIR}/${pkg}" "${PKG_DIR}/${pkg}"
+        echo "  Copied ${pkg} package"
+    else
+        echo "  WARNING: ${pkg} package not found in ${REFERENCE_DIR}"
+    fi
+done
 
 # Remove unnecessary files (compiled C extensions, tests, __pycache__, GUI)
 find "${PKG_DIR}" -name '*.pyc' -delete
@@ -93,6 +99,28 @@ else
 fi
 
 # ------------------------------------------------------------------
+# 1c. Install calibre resources and ISO 639 language maps
+# ------------------------------------------------------------------
+echo ""
+echo "--- Installing calibre resources ---"
+DATA_DIR="${PKG_DIR}/calibre/data"
+mkdir -p "${DATA_DIR}"
+for res in templates jacket default_tweaks.py mime.types; do
+    if [ -e "${REFERENCE_DIR}/resources/${res}" ]; then
+        cp -r "${REFERENCE_DIR}/resources/${res}" "${DATA_DIR}/"
+        echo "  ${res}"
+    else
+        echo "  ERROR: calibre resource not found: ${REFERENCE_DIR}/resources/${res}"
+        exit 1
+    fi
+done
+ISO_CODES_ZIP="${ISO_CODES_ZIP:-/tmp/iso-codes.zip}"
+if [ ! -f "${ISO_CODES_ZIP}" ]; then
+    curl -fsSL -o "${ISO_CODES_ZIP}" https://download.calibre-ebook.com/iso-codes.zip
+fi
+python3 "${SCRIPT_DIR}/generate-iso639.py" "${ISO_CODES_ZIP}" "${DATA_DIR}/localization/iso639.json"
+
+# ------------------------------------------------------------------
 # 2. Overlay WASM-compatible stubs
 # ------------------------------------------------------------------
 echo ""
@@ -109,36 +137,6 @@ if [ -d "${STUBS_DIR}" ]; then
     done
 fi
 echo "  Overlaid ${stub_count} stub files"
-
-# ------------------------------------------------------------------
-# 3. Bundle pure-Python dependencies not available via micropip
-#    (odfpy for ODT support, defusedxml as odfpy dependency)
-# ------------------------------------------------------------------
-echo ""
-echo "--- Bundling pure-Python dependencies ---"
-dep_count=0
-
-ODF_SRC="$(python3 -c "import odf, os; print(os.path.dirname(odf.__file__))" 2>/dev/null || true)"
-if [ -n "${ODF_SRC}" ] && [ -d "${ODF_SRC}" ]; then
-    cp -r "${ODF_SRC}" "${PKG_DIR}/odf"
-    find "${PKG_DIR}/odf" -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
-    dep_count=$((dep_count + 1))
-    echo "  odf (odfpy) — copied from ${ODF_SRC}"
-else
-    echo "  WARNING: odfpy not found — install with: pip install odfpy"
-fi
-
-DEFUSEDXML_SRC="$(python3 -c "import defusedxml, os; print(os.path.dirname(defusedxml.__file__))" 2>/dev/null || true)"
-if [ -n "${DEFUSEDXML_SRC}" ] && [ -d "${DEFUSEDXML_SRC}" ]; then
-    cp -r "${DEFUSEDXML_SRC}" "${PKG_DIR}/defusedxml"
-    find "${PKG_DIR}/defusedxml" -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
-    dep_count=$((dep_count + 1))
-    echo "  defusedxml — copied from ${DEFUSEDXML_SRC}"
-else
-    echo "  WARNING: defusedxml not found — install with: pip install defusedxml"
-fi
-
-echo "  Bundled ${dep_count} dependency packages"
 
 # ------------------------------------------------------------------
 # 4. Verify data files

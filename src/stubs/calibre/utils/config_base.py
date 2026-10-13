@@ -38,6 +38,34 @@ tweaks = {
     'title_series_sorting': 'library_order',
     'use_series_auto_increment_tweak_when_importing': False,
 }
+
+def exec_tweaks(path):
+    if isinstance(path, bytes):
+        raw = path
+        fname = '<string>'
+    else:
+        with open(path, 'rb') as f:
+            raw = f.read()
+            fname = f.name
+    code = compile(raw, fname, 'exec')
+    l = {}
+    g = {'__file__': fname}
+    exec(code, g, l)
+    return l
+
+
+def default_tweaks_raw():
+    from calibre.utils.resources import get_path as P
+    return P('default_tweaks.py', data=True, allow_user_override=False)
+
+
+# The defaults above are only used if calibre's default_tweaks.py is missing
+try:
+    tweaks.update(exec_tweaks(default_tweaks_raw()))
+except Exception:
+    import traceback
+    traceback.print_exc()
+
 plugin_dir = os.path.join(config_dir, 'plugins')
 
 def from_json(obj):

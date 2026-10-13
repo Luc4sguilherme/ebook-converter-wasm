@@ -150,11 +150,12 @@ RUN curl -fsSL https://github.com/freetype/freetype/archive/refs/tags/VER-2-13-2
 
 # ----------------------------------------------------------------------------
 # HunSpell 1.7.2
+# The bundled config.sub (2018) does not know wasm32-unknown-emscripten, use
+# the newer copies that come with the installed automake
 # ----------------------------------------------------------------------------
 RUN curl -fsSL https://github.com/hunspell/hunspell/releases/download/v1.7.2/hunspell-1.7.2.tar.gz | tar xz \
     && cd hunspell-1.7.2 \
-    && curl -fsSL 'https://git.savannah.gnu.org/cgit/config.git/plain/config.sub' > config.sub \
-    && curl -fsSL 'https://git.savannah.gnu.org/cgit/config.git/plain/config.guess' > config.guess \
+    && cp "$(automake --print-libdir)/config.sub" "$(automake --print-libdir)/config.guess" . \
     && emconfigure ./configure \
         --prefix=/build/libs \
         --host=wasm32-unknown-emscripten \
@@ -282,21 +283,26 @@ ARG SINGLE_FILE=1
 ENV SINGLE_FILE=$SINGLE_FILE
 
 ARG CALIBRE_REPO=https://github.com/kovidgoyal/calibre.git
-ARG CALIBRE_REF=master
+# The WASM stubs and patches target this calibre release, keep them in sync
+# when upgrading.
+ARG CALIBRE_REF=v9.7.0
 RUN git clone --depth 1 --branch "${CALIBRE_REF}" \
         --filter=blob:none --sparse \
         "${CALIBRE_REPO}" /build/src/calibre-source \
     && cd /build/src/calibre-source \
-    && git sparse-checkout set src/calibre src/polyglot src/tinycss \
+    && git sparse-checkout set src/calibre src/polyglot src/tinycss src/css_selectors src/odf \
+        resources/templates resources/jacket resources/default_tweaks.py resources/mime.types \
     && rm -rf /build/src/calibre-source/.git
+
+# Language code data, the same snapshot of the iso-codes project calibre uses
+ENV ISO_CODES_ZIP=/build/src/iso-codes.zip
+RUN curl -fsSL -o "${ISO_CODES_ZIP}" https://download.calibre-ebook.com/iso-codes.zip
 
 COPY scripts/ /build/scripts/
 COPY src/stubs/ /build/src/stubs/
 COPY src/patches/ /build/src/patches/
 
 RUN chmod +x /build/scripts/*.sh
-
-RUN pip3 install --no-cache-dir odfpy defusedxml
 
 RUN python3 /build/scripts/patch-calibre.py
 

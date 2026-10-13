@@ -171,9 +171,9 @@ build_hunspell() {
         curl -fsSL https://github.com/hunspell/hunspell/releases/download/v1.7.2/hunspell-1.7.2.tar.gz | tar xz
     fi
     cd hunspell-1.7.2
-    # Update config.sub/config.guess for wasm32 support
-    curl -fsSL 'https://git.savannah.gnu.org/cgit/config.git/plain/config.sub' > config.sub
-    curl -fsSL 'https://git.savannah.gnu.org/cgit/config.git/plain/config.guess' > config.guess
+    # The bundled config.sub (2018) does not know wasm32-unknown-emscripten,
+    # use the newer copies that come with the installed automake
+    cp "$(automake --print-libdir)/config.sub" "$(automake --print-libdir)/config.guess" .
     emconfigure ./configure \
         --prefix="${PREFIX}" \
         --host=wasm32-unknown-emscripten \

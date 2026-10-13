@@ -3,6 +3,7 @@ WASM-compatible replacement for calibre.utils.resources
 
 Resolves paths within the WASM virtual filesystem.
 """
+import builtins
 import os
 import sys
 
@@ -50,3 +51,6 @@ class PathResolver:
 _resolver = PathResolver()
 get_path = _resolver
 get_image_path = _resolver
+
+builtins.__dict__['P'] = get_path
+builtins.__dict__['I'] = get_image_path

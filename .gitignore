@@ -5,3 +5,5 @@ public/
 *.o
 *.a
 .DS_Store
+__pycache__/
+*.pyc

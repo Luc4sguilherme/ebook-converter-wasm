@@ -116,9 +116,19 @@ class EbookConverter {
         return this._inner.init(onProgress);
     }
 
-    async convert(inputData, inputName, outputFormat, options) {
+    writeFile(name, data) {
         if (!this._inner) throw new Error('Call init() first');
-        return this._inner.convert(inputData, inputName, outputFormat, options);
+        return this._inner.writeFile(name, data);
+    }
+
+    readFile(name) {
+        if (!this._inner) throw new Error('Call init() first');
+        return this._inner.readFile(name);
+    }
+
+    async convert(inputFile, outputFile, options, onProgress) {
+        if (!this._inner) throw new Error('Call init() first');
+        return this._inner.convert(inputFile, outputFile, options, onProgress);
     }
 
     getSupportedInputFormats() {
@@ -141,8 +151,13 @@ class EbookConverter {
     }
 }
 
-module.exports = { EbookConverter };
-module.exports.default = { EbookConverter };
+async function convertEbook(...args) {
+    const mod = await load();
+    return mod.convertEbook(...args);
+}
+
+module.exports = { EbookConverter, convertEbook };
+module.exports.default = { EbookConverter, convertEbook };
 `;
 writeFileSync(join(NODE_OUT, 'ebook-convert.cjs'), cjsWrapper);
 console.log('  ebook-convert.cjs');

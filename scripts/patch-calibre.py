@@ -26,10 +26,19 @@ PATCH_FILE = os.path.join(PATCHES_DIR, 'calibre-wasm.patch')
 WORK_DIR = '/tmp/calibre-patch'
 CLONE_DIR = '/tmp/calibre-clone'
 
+# Snapshot of the iso-codes project, the same one calibre itself uses to
+# build its language code maps
+ISO_CODES_URL = 'https://download.calibre-ebook.com/iso-codes.zip'
+ISO_CODES_ZIP = os.environ.get('ISO_CODES_ZIP', '/tmp/iso-codes.zip')
+
+# Files from calibre's resources/ directory needed for conversion. They are
+# installed in calibre/data/, where calibre.utils.resources looks for them.
+RESOURCES = ['templates', 'jacket', 'default_tweaks.py', 'mime.types']
+
 DOCKER_SOURCE_DIR = os.path.join(PROJECT_DIR, 'src', 'calibre-source')
 
 CALIBRE_REPO = 'https://github.com/kovidgoyal/calibre.git'
-CALIBRE_REF = 'master'
+CALIBRE_REF = os.environ.get('CALIBRE_REF', 'v9.7.0')
 
 def find_or_clone_calibre():
     """Find pre-cloned calibre source or clone from upstream."""
@@ -52,7 +61,8 @@ def find_or_clone_calibre():
     ])
 
     subprocess.check_call(
-        ['git', 'sparse-checkout', 'set', 'src/calibre', 'src/polyglot', 'src/tinycss'],
+        ['git', 'sparse-checkout', 'set', 'src/calibre', 'src/polyglot', 'src/tinycss',
+         'src/css_selectors', 'src/odf'] + [f'resources/{x}' for x in RESOURCES],
         cwd=CLONE_DIR
     )
 
@@ -92,18 +102,20 @@ def package_from_calibre():
     else:
         print(f"  WARNING: polyglot not found at {src_polyglot}")
 
-    src_tinycss = os.path.join(reference_dir, 'src', 'tinycss')
-    dst_tinycss = os.path.join(WORK_DIR, 'tinycss')
-
-    if os.path.isdir(src_tinycss):
-        shutil.copytree(src_tinycss, dst_tinycss,
-                        ignore=shutil.ignore_patterns(
-                            '__pycache__', '*.pyc', '*.pyo', '*.c', '*.so',
-                            'tests',
-                        ))
-        print(f"  Copied tinycss package")
-    else:
-        print(f"  WARNING: tinycss not found at {src_tinycss}")
+    # Pure Python packages that live next to calibre in its source tree.
+    # calibre ships its own fork of odfpy as the odf package.
+    for pkg in ('tinycss', 'css_selectors', 'odf'):
+        src_pkg = os.path.join(reference_dir, 'src', pkg)
+        dst_pkg = os.path.join(WORK_DIR, pkg)
+        if os.path.isdir(src_pkg):
+            shutil.copytree(src_pkg, dst_pkg,
+                            ignore=shutil.ignore_patterns(
+                                '__pycache__', '*.pyc', '*.pyo', '*.c', '*.so',
+                                'tests',
+                            ))
+            print(f"  Copied {pkg} package")
+        else:
+            print(f"  WARNING: {pkg} not found at {src_pkg}")
 
     for root, dirs, files in os.walk(dst_calibre):
         for f in files:
@@ -127,11 +139,37 @@ def package_from_calibre():
 
     apply_wasm_patches(WORK_DIR)
 
+    install_resources(reference_dir, os.path.join(dst_calibre, 'data'))
+
     overlay_stubs(WORK_DIR, STUBS_DIR)
 
-    bundle_python_deps(WORK_DIR)
-
     build_zip(WORK_DIR, ZIP_PATH)
+
+def install_resources(reference_dir, data_dir):
+    """Copy calibre's resources and generate the ISO 639 language maps."""
+    import subprocess
+    print(f"\nInstalling resources into {data_dir}...")
+    os.makedirs(data_dir, exist_ok=True)
+    for name in RESOURCES:
+        src = os.path.join(reference_dir, 'resources', name)
+        dst = os.path.join(data_dir, name)
+        if os.path.isdir(src):
+            shutil.copytree(src, dst, dirs_exist_ok=True)
+        elif os.path.isfile(src):
+            shutil.copy2(src, dst)
+        else:
+            print(f"ERROR: calibre resource not found: {src}")
+            sys.exit(1)
+        print(f"  {name}")
+
+    if not os.path.exists(ISO_CODES_ZIP):
+        import urllib.request
+        print(f"  Downloading {ISO_CODES_URL}")
+        urllib.request.urlretrieve(ISO_CODES_URL, ISO_CODES_ZIP)
+    subprocess.check_call([
+        sys.executable, os.path.join(SCRIPT_DIR, 'generate-iso639.py'),
+        ISO_CODES_ZIP, os.path.join(data_dir, 'localization', 'iso639.json'),
+    ])
 
 def apply_wasm_patches(work_dir):
     """Apply WASM-specific patches from the .patch file."""
@@ -160,29 +198,6 @@ def apply_wasm_patches(work_dir):
             sys.exit(1)
     else:
         print(f"  Applied {PATCH_FILE}")
-
-def bundle_python_deps(work_dir):
-    """Bundle pure-Python dependencies (odfpy, defusedxml) into work_dir."""
-    print(f"\nBundling pure-Python dependencies...")
-    dep_count = 0
-
-    for pkg_name in ['odf', 'defusedxml']:
-        try:
-            mod = __import__(pkg_name)
-            src_dir = os.path.dirname(mod.__file__)
-        except ImportError:
-            print(f"  WARNING: {pkg_name} not installed (pip install {'odfpy' if pkg_name == 'odf' else pkg_name})")
-            continue
-
-        dst_dir = os.path.join(work_dir, pkg_name)
-        if os.path.exists(dst_dir):
-            shutil.rmtree(dst_dir)
-        shutil.copytree(src_dir, dst_dir,
-                        ignore=shutil.ignore_patterns('__pycache__', '*.pyc', '*.pyo'))
-        dep_count += 1
-        print(f"  {pkg_name} — copied from {src_dir}")
-
-    print(f"  Bundled {dep_count} dependency packages")
 
 def overlay_stubs(work_dir, stubs_dir):
     """Overlay WASM stubs onto the work directory."""

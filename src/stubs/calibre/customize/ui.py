@@ -1,10 +1,13 @@
 from calibre.customize.profiles import (
     InputProfile, OutputProfile,
-    input_profiles as _ip, output_profiles as _op
+    input_profiles as _input_profile_classes, output_profiles as _output_profile_classes
 )
 from calibre.customize.conversion import InputFormatPlugin, OutputFormatPlugin
 import importlib
 import pkgutil
+
+_ip = [cls(None) for cls in _input_profile_classes]
+_op = [cls(None) for cls in _output_profile_classes]
 
 def input_profiles():
     return _ip
@@ -140,22 +143,141 @@ def available_output_formats():
         fmts.update({'html', 'htm', 'htmlz'})
     return fmts
 
-def get_file_type_metadata(stream, file_ext):
-    import os
-    from calibre.ebooks.metadata import MetaInformation
-    from calibre.ebooks.metadata.meta import metadata_from_filename
+class _Flag:
 
-    name = getattr(stream, 'name', None) or f'unknown.{file_ext}'
-    name = os.path.basename(name)
+    def __init__(self, attr):
+        self.attr = attr
+        setattr(self, attr, False)
+
+    def __enter__(self):
+        setattr(self, self.attr, True)
+
+    def __exit__(self, *args):
+        setattr(self, self.attr, False)
+
+
+quick_metadata = _Flag('quick')
+apply_null_metadata = _Flag('apply_null')
+force_identifiers = _Flag('force_identifiers')
+
+
+# Metadata readers and writers, mirroring the MetadataReaderPlugin and
+# MetadataWriterPlugin classes in calibre/customize/builtins.py, which cannot
+# be imported in WASM as it also pulls in the device drivers and the GUI.
+# file type -> (module, function, extra keyword arguments)
+_METADATA_READERS = {
+    'chm': ('calibre.ebooks.chm.metadata', 'get_metadata'),
+    'epub': ('calibre.ebooks.metadata.epub', 'get_metadata'),
+    'kepub': ('calibre.ebooks.metadata.epub', 'get_metadata'),
+    'fb2': ('calibre.ebooks.metadata.fb2', 'get_metadata'),
+    'fbz': ('calibre.ebooks.metadata.fb2', 'get_metadata'),
+    'html': ('calibre.ebooks.metadata.html', 'get_metadata'),
+    'htmlz': ('calibre.ebooks.metadata.extz', 'get_metadata'),
+    'imp': ('calibre.ebooks.metadata.imp', 'get_metadata'),
+    'lit': ('calibre.ebooks.metadata.lit', 'get_metadata'),
+    'lrf': ('calibre.ebooks.lrf.meta', 'get_metadata'),
+    'lrx': ('calibre.ebooks.metadata.lrx', 'get_metadata'),
+    'odt': ('calibre.ebooks.metadata.odt', 'get_metadata'),
+    'docx': ('calibre.ebooks.metadata.docx', 'get_metadata'),
+    'opf': ('calibre.ebooks.metadata.opf', 'get_metadata'),
+    'pdb': ('calibre.ebooks.metadata.pdb', 'get_metadata'),
+    'updb': ('calibre.ebooks.metadata.pdb', 'get_metadata'),
+    'pdf': ('calibre.ebooks.metadata.pdf', 'get_metadata'),
+    'pml': ('calibre.ebooks.metadata.pml', 'get_metadata'),
+    'pmlz': ('calibre.ebooks.metadata.pml', 'get_metadata'),
+    'rb': ('calibre.ebooks.metadata.rb', 'get_metadata'),
+    'rtf': ('calibre.ebooks.metadata.rtf', 'get_metadata'),
+    'snb': ('calibre.ebooks.metadata.snb', 'get_metadata'),
+    'tpz': ('calibre.ebooks.metadata.topaz', 'get_metadata'),
+    'azw1': ('calibre.ebooks.metadata.topaz', 'get_metadata'),
+    'txt': ('calibre.ebooks.metadata.txt', 'get_metadata'),
+    'txtz': ('calibre.ebooks.metadata.extz', 'get_metadata'),
+    'zip': ('calibre.ebooks.metadata.zip', 'get_metadata'),
+    'oebzip': ('calibre.ebooks.metadata.zip', 'get_metadata'),
+}
+for _fmt in ('mobi', 'prc', 'azw', 'azw3', 'azw4', 'pobi'):
+    _METADATA_READERS[_fmt] = ('calibre.ebooks.metadata.mobi', 'get_metadata')
+
+_METADATA_WRITERS = {
+    'epub': ('calibre.ebooks.metadata.epub', 'set_metadata'),
+    'kepub': ('calibre.ebooks.metadata.epub', 'set_metadata'),
+    'fb2': ('calibre.ebooks.metadata.fb2', 'set_metadata'),
+    'fbz': ('calibre.ebooks.metadata.fb2', 'set_metadata'),
+    'htmlz': ('calibre.ebooks.metadata.extz', 'set_metadata'),
+    'txtz': ('calibre.ebooks.metadata.extz', 'set_metadata'),
+    'lrf': ('calibre.ebooks.lrf.meta', 'set_metadata'),
+    'pdb': ('calibre.ebooks.metadata.pdb', 'set_metadata'),
+    'pdf': ('calibre.ebooks.metadata.pdf', 'set_metadata'),
+    'rtf': ('calibre.ebooks.metadata.rtf', 'set_metadata'),
+    'tpz': ('calibre.ebooks.metadata.topaz', 'set_metadata'),
+    'azw1': ('calibre.ebooks.metadata.topaz', 'set_metadata'),
+    'odt': ('calibre.ebooks.metadata.odt', 'set_metadata'),
+    'docx': ('calibre.ebooks.metadata.docx', 'set_metadata'),
+}
+for _fmt in ('mobi', 'prc', 'azw', 'azw3', 'azw4'):
+    _METADATA_WRITERS[_fmt] = ('calibre.ebooks.metadata.mobi', 'set_metadata')
+
+
+def _metadata_function(table, ftype):
+    entry = table.get((ftype or '').lower().strip())
+    if entry is None:
+        return None
+    mod, func = entry
+    return getattr(importlib.import_module(mod), func)
+
+
+def get_file_type_metadata(stream, ftype):
+    import traceback
+    from calibre.ebooks.metadata.book.base import Metadata
+    mi = Metadata(None, None)
+    ftype = (ftype or '').lower().strip()
     try:
-        metadata = metadata_from_filename(name)
-        return metadata
+        reader = _metadata_function(_METADATA_READERS, ftype)
     except Exception:
-        title = name.rsplit('.', 1)[0] or 'Unknown'
-        return MetaInformation(title, ['Unknown'])
+        traceback.print_exc()
+        return mi
+    if reader is None:
+        return mi
+    if hasattr(stream, 'seek'):
+        stream.seek(0)
+    try:
+        if ftype in ('epub', 'kepub'):
+            if quick_metadata.quick:
+                from calibre.ebooks.metadata.epub import get_quick_metadata
+                return get_quick_metadata(stream, ftype=ftype)
+            return reader(stream, ftype=ftype)
+        if ftype == 'pdf' and quick_metadata.quick:
+            from calibre.ebooks.metadata.pdf import get_quick_metadata
+            return get_quick_metadata(stream)
+        ans = reader(stream)
+        if ftype == 'opf':
+            ans = ans[0]
+        return ans
+    except Exception:
+        traceback.print_exc()
+    return mi
 
-def set_file_type_metadata(stream, mi, file_ext):
-    pass
+
+def set_file_type_metadata(stream, mi, ftype, report_error=None):
+    import traceback
+    ftype = (ftype or '').lower().strip()
+    try:
+        writer = _metadata_function(_METADATA_WRITERS, ftype)
+        if writer is None:
+            return
+        if ftype in ('epub', 'kepub'):
+            writer(stream, mi, apply_null=apply_null_metadata.apply_null,
+                   force_identifiers=force_identifiers.force_identifiers)
+        elif ftype in ('fb2', 'fbz'):
+            writer(stream, mi, apply_null=apply_null_metadata.apply_null)
+        else:
+            writer(stream, mi)
+        stream.flush()
+    except Exception:
+        if report_error is None:
+            traceback.print_exc()
+        else:
+            report_error(mi, ftype, traceback.format_exc())
 
 all_metadata_plugins = []
 
@@ -163,37 +285,16 @@ def metadata_plugins(cap):
     return []
 
 def metadata_readers():
-    return []
+    return set(_METADATA_READERS)
 
 def metadata_writers():
-    return []
+    return set(_METADATA_WRITERS)
 
 def run_plugins_on_preprocess(*args, **kwargs):
     return args[0] if args else None
 
 def run_plugins_on_postprocess(*args, **kwargs):
     pass
-
-def quick_metadata(mi=None, *a, **kw):
-    from contextlib import contextmanager
-    @contextmanager
-    def _ctx():
-        yield
-    return _ctx()
-
-def apply_null_metadata(mi=None, *a, **kw):
-    from contextlib import contextmanager
-    @contextmanager
-    def _ctx():
-        yield
-    return _ctx()
-
-def force_identifiers(*a, **kw):
-    from contextlib import contextmanager
-    @contextmanager
-    def _ctx():
-        yield
-    return _ctx()
 
 def find_plugin(name):
     return None

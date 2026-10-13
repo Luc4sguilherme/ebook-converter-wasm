@@ -15,6 +15,7 @@ process.on('message', async (msg) => {
             const result = await converter.convert(
                 msg.inputName,
                 outputFile,
+                msg.options || {},
             );
             process.send({
                 type: 'result',

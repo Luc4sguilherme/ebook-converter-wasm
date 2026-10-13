@@ -7,18 +7,15 @@ import json
 import os
 
 def get_lang():
-    return 'en_US'
+    return os.environ.get('CALIBRE_OVERRIDE_LANG') or 'en'
 
 def is_rtl():
     return get_lang()[:2].lower() in {'he', 'ar'}
 
-_RTL_LANGS = frozenset('ar he fa ur yi'.split())
-
 def is_rtl_lang(lang):
-    if lang:
-        lang = lang.split('_')[0].split('-')[0].lower()
-        return lang in _RTL_LANGS
-    return False
+    lang = canonicalize_lang(lang)
+    # Aramaic, Arabic, Azeri, Hebrew, Dhivehi, Sorani, Urdu, Farsi
+    return lang and lang in ('ara', 'heb', 'aze', 'div', 'arc', 'syc', 'myz', 'ckb', 'urd', 'fas')
 
 lcdata = {'abday': ('Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'),
           'abmon': ('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug',
@@ -38,103 +35,90 @@ lcdata = {'abday': ('Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'),
           'yesexpr': '^[yY].*'}
 
 _iso639 = None
+_extra_lang_codes = {
+        'pt_BR': 'Brazilian Portuguese',
+        'zh_CN': 'Simplified Chinese',
+        'zh_TW': 'Traditional Chinese',
+        'bn_IN': 'Indian Bengali',
+        'bn_BD': 'Bangladeshi Bengali',
+        'en'   : 'English',
+        'und'  : 'Unknown'
+        }
+_lcase_map = {k.lower(): k for k in _extra_lang_codes}
 
 def _load_iso639():
+    # Generated at build time by scripts/generate-iso639.py from the iso-codes
+    # project, with the same algorithm calibre uses to create
+    # localization/iso639.calibre_msgpack
     global _iso639
     if _iso639 is None:
-
-        data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
-        src = os.path.join(data_dir, 'iso_639-3.json')
-
-        if not os.path.exists(src):
-            _iso639 = {'by_2': {}, 'by_3': {}, 'codes2': {}, 'codes3': {},
-                        'by_name': {}}
-            return _iso639
-
-        with open(src, 'rb') as f:
-            root = json.load(f)
-
-        entries = root['639-3']
-        by_2 = {}
-        by_3 = {}
-        codes2 = {}
-        codes3 = {}
-        by_name = {}
-
-        for entry in entries:
-            alpha3 = entry.get('alpha_3', '')
-            alpha2 = entry.get('alpha_2', '')
-            name = entry.get('name', '')
-            inverted_name = entry.get('inverted_name', '')
-
-            if alpha3:
-                by_3[alpha3] = entry
-                codes3[alpha3] = name
-            if alpha2:
-                by_2[alpha2] = entry
-                codes2[alpha2] = name
-            if name:
-                by_name[name.lower()] = entry
-            if inverted_name:
-                by_name[inverted_name.lower()] = entry
-
-        _iso639 = {
-            'by_2': by_2,
-            'by_3': by_3,
-            'codes2': codes2,
-            'codes3': codes3,
-            'by_name': by_name,
-        }
+        from calibre.utils.resources import get_path as P
+        try:
+            _iso639 = json.loads(P('localization/iso639.json', allow_user_override=False, data=True))
+        except ValueError:
+            _iso639 = {}
+        for k in ('by_2', 'by_3', '2to3', '3to2', 'name_map'):
+            _iso639.setdefault(k, {})
+        _iso639['codes2'] = frozenset(_iso639['by_2'])
+        _iso639['codes3'] = frozenset(_iso639['by_3'])
     return _iso639
+
+def get_iso_language(lang_trans, lang):
+    iso639 = _load_iso639()
+    ans = lang
+    lang = lang.split('_')[0].lower()
+    if len(lang) == 2:
+        ans = iso639['by_2'].get(lang, ans)
+    elif len(lang) == 3:
+        if lang in iso639['by_3']:
+            ans = iso639['by_3'][lang]
+    return lang_trans(ans)
+
+def get_language(lang, gettext_func=None):
+    translate = gettext_func or _
+    lang = _lcase_map.get(lang, lang)
+    if lang in _extra_lang_codes:
+        return translate(_extra_lang_codes[lang])
+    return get_iso_language(translate, lang)
 
 def canonicalize_lang(raw):
     if not raw:
         return None
-    raw = raw.strip().lower()
+    if not isinstance(raw, str):
+        raw = raw.decode('utf-8', 'ignore')
+    raw = raw.lower().strip()
     if not raw:
         return None
-    raw = raw.replace('-', '_')
-    if '_' in raw:
-        raw = raw.split('_')[0]
+    raw = raw.replace('_', '-').partition('-')[0].strip()
+    if not raw:
+        return None
+    iso639 = _load_iso639()
+    m2to3 = iso639['2to3']
+
     if len(raw) == 2:
-        data = _load_iso639()
-        if raw in data['by_2']:
-            return raw
+        ans = m2to3.get(raw, None)
+        if ans is not None:
+            return ans
     elif len(raw) == 3:
-        data = _load_iso639()
-        if raw in data['by_3']:
-            entry = data['by_3'][raw]
-            a2 = entry.get('alpha_2', '')
-            return a2 if a2 else raw
-    return raw if len(raw) <= 3 else None
+        if raw in iso639['by_3']:
+            return raw
 
-def lang_as_iso639_1(raw):
-    if not raw:
-        return None
-    raw = raw.strip().lower().replace('-', '_')
-    if '_' in raw:
-        raw = raw.split('_')[0]
-    if len(raw) == 2:
-        return raw
-    if len(raw) == 3:
-        data = _load_iso639()
-        if raw in data['by_3']:
-            return data['by_3'][raw].get('alpha_2', raw)
-    return raw
+    return iso639['name_map'].get(raw, None)
 
-def lang_as_iso639_3(raw):
-    if not raw:
-        return None
-    raw = raw.strip().lower().replace('-', '_')
-    if '_' in raw:
-        raw = raw.split('_')[0]
-    if len(raw) == 3:
-        return raw
-    if len(raw) == 2:
-        data = _load_iso639()
-        if raw in data['by_2']:
-            return data['by_2'][raw].get('alpha_3', raw)
-    return raw
+_lang_map = None
+
+def lang_map():
+    ' Return mapping of ISO 639 3 letter codes to language names '
+    global _lang_map
+    if _lang_map is None:
+        _lang_map = dict(_load_iso639()['by_3'])
+    return _lang_map
+
+def lang_as_iso639_1(name_or_code):
+    code = canonicalize_lang(name_or_code)
+    if code is not None:
+        iso639 = _load_iso639()
+        return iso639['3to2'].get(code, None)
 
 def get_udc():
     """Return a Unihandecoder instance. Fallback to simple ASCII transliterator."""
@@ -159,29 +143,37 @@ pgettext = lambda c, m: m
 def get_available_translations():
     return ['en']
 
-def calibre_langcode_to_name(lc, localize=False):
-    data = _load_iso639()
-    if lc in data['codes2']:
-        return data['codes2'][lc]
-    if lc in data['codes3']:
-        return data['codes3'][lc]
+def calibre_langcode_to_name(lc, localize=True):
+    iso639 = _load_iso639()
+    try:
+        return iso639['by_3'][lc]
+    except Exception:
+        pass
     return lc
 
 langcode_to_name = calibre_langcode_to_name
 
+def ui_language_as_english():
+    return calibre_langcode_to_name(canonicalize_lang(get_lang()) or 'eng', localize=False) or 'English'
+
 def langnames_to_langcodes(names):
-    data = _load_iso639()
-    result = {}
-    for name in names:
-        key = name.lower()
-        if key in data['by_name']:
-            entry = data['by_name'][key]
-            a2 = entry.get('alpha_2', '')
-            a3 = entry.get('alpha_3', '')
-            result[name] = {a2} if a2 else ({a3} if a3 else set())
-        else:
-            result[name] = set()
-    return result
+    '''
+    Given a list of language names return a mapping of the names to 3
+    letter ISO 639 language codes. If a name is not recognized, it is mapped to
+    None.
+    '''
+    iso639 = _load_iso639()
+    ans = {}
+    names = set(names)
+    for k, v in iso639['by_3'].items():
+        if v in names:
+            names.remove(v)
+            ans[v] = k
+        if not names:
+            break
+    for x in names:
+        ans[x] = None
+    return ans
 
 def localize_user_manual_link(url):
     """Return URL unchanged in WASM."""

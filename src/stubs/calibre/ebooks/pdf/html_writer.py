@@ -203,6 +203,192 @@ def _inject_image_dimensions(html_content, html_dir, avail_w_pt):
 
     return re.sub(r'<img[^>]*/?>', _process_img, html_content, flags=re.IGNORECASE)
 
+XHTML_NS = 'http://www.w3.org/1999/xhtml'
+_BLOCK_TAGS = frozenset((
+    'body', 'p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'ul', 'ol',
+    'dl', 'dt', 'dd', 'blockquote', 'pre', 'table', 'thead', 'tbody', 'tfoot',
+    'tr', 'td', 'th', 'section', 'article', 'center', 'header', 'footer',
+    'nav', 'aside', 'main', 'figure', 'figcaption', 'hr',
+))
+_ALIGNABLE_TAGS = frozenset(('p', 'div', 'td', 'th', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'))
+_INHERITED = ('text-align', 'font-weight', 'font-style', 'color', 'text-decoration')
+# Formatting implied by the tag itself (user agent stylesheet)
+_TAG_FORMATTING = {
+    'b': 'b', 'strong': 'b', 'th': 'b',
+    'h1': 'b', 'h2': 'b', 'h3': 'b', 'h4': 'b', 'h5': 'b', 'h6': 'b',
+    'i': 'i', 'em': 'i', 'cite': 'i', 'var': 'i', 'dfn': 'i',
+    'u': 'u', 'ins': 'u', 's': 's', 'del': 's', 'strike': 's',
+}
+_BLACK = frozenset(('black', '#000', '#000000', 'rgb(0,0,0)', 'initial', 'inherit', 'currentcolor', 'windowtext'))
+
+
+def _parse_declarations(text):
+    ans = {}
+    for decl in (text or '').split(';'):
+        name, sep, val = decl.partition(':')
+        if sep:
+            val = val.replace('!important', '').strip()
+            if val:
+                ans[name.strip().lower()] = val
+    return ans
+
+
+def _parse_stylesheet(css, rules):
+    css = re.sub(r'/\*.*?\*/', '', css, flags=re.DOTALL)
+    # Drop @page, @font-face, etc. rules, keep the contents of @media blocks
+    css = re.sub(r'@(?:page|font-face)[^{]*\{[^}]*\}', '', css, flags=re.IGNORECASE)
+    css = re.sub(r'@[a-z-]+[^{;]*;', '', css, flags=re.IGNORECASE)
+    for m in re.finditer(r'([^{}@]+)\{([^{}]*)\}', css):
+        decls = _parse_declarations(m.group(2))
+        if not decls:
+            continue
+        for sel in m.group(1).split(','):
+            sel = sel.strip().lower()
+            if re.match(r'^[a-z0-9]*(\.[\w-]+)?$', sel) and sel:
+                rules.setdefault(sel, {}).update(decls)
+
+
+def _css_color(val):
+    ''' Return the color as #rrggbb or None for black and unsupported values '''
+    val = val.strip().lower()
+    if val in _BLACK:
+        return None
+    from PIL import ImageColor
+    try:
+        rgb = ImageColor.getrgb(val)[:3]
+    except ValueError:
+        return None
+    return None if rgb == (0, 0, 0) else '#{:02x}{:02x}{:02x}'.format(*rgb)
+
+
+def _is_bold(val):
+    val = (val or '').strip().lower()
+    if val in ('bold', 'bolder'):
+        return True
+    return val.isdigit() and int(val) >= 600
+
+
+def _local(tag):
+    return tag.rpartition('}')[-1].lower() if isinstance(tag, str) else ''
+
+
+def _wrap_content(elem, tag, **attrs):
+    wrapper = elem.makeelement(f'{{{XHTML_NS}}}{tag}' if elem.tag.startswith('{') else tag, attrs)
+    wrapper.text, elem.text = elem.text, None
+    for child in list(elem):
+        wrapper.append(child)
+    elem.append(wrapper)
+    return wrapper
+
+
+def _apply_css_styles(html_content, html_dir):
+    '''
+    Resolve the CSS of the book (calibre's flattened class based stylesheets
+    and inline styles) and express the parts that fpdf2 understands with HTML
+    markup: text alignment as style on block elements, bold, italic,
+    underline, strike through, colors, superscripts and subscripts as
+    formatting tags, and remove elements with display: none.
+    '''
+    try:
+        root = etree.fromstring(html_content.encode('utf-8'))
+    except Exception:
+        return html_content
+    rules = {}
+    for elem in root.iter():
+        tag = _local(elem.tag)
+        if tag == 'link' and 'stylesheet' in (elem.get('rel') or '').lower() and elem.get('href'):
+            path = os.path.normpath(os.path.join(html_dir, elem.get('href')))
+            try:
+                with open(path, 'rb') as f:
+                    _parse_stylesheet(f.read().decode('utf-8', 'replace'), rules)
+            except OSError:
+                pass
+        elif tag == 'style' and elem.text:
+            _parse_stylesheet(elem.text, rules)
+
+    body = next((e for e in root.iter() if _local(e.tag) == 'body'), None)
+    if body is None:
+        return html_content
+
+    def walk(elem, inherited, applied):
+        tag = _local(elem.tag)
+        decl = dict(rules.get(tag, {}))
+        for cls in (elem.get('class') or '').split():
+            cls = cls.lower()
+            decl.update(rules.get('.' + cls, {}))
+            decl.update(rules.get(f'{tag}.{cls}', {}))
+        inline = _parse_declarations(elem.get('style'))
+        decl.update(inline)
+        if decl.get('display', '').lower() == 'none':
+            parent = elem.getparent()
+            if parent is not None:
+                if elem.tail:
+                    prev = elem.getprevious()
+                    if prev is not None:
+                        prev.tail = (prev.tail or '') + elem.tail
+                    else:
+                        parent.text = (parent.text or '') + elem.tail
+                parent.remove(elem)
+            return
+
+        computed = dict(inherited)
+        for prop in _INHERITED:
+            if prop in decl:
+                computed[prop] = decl[prop].lower()
+        if 'text-decoration-line' in decl:
+            computed['text-decoration'] = decl['text-decoration-line'].lower()
+
+        # Keep only the inline properties that are handled later, the rest
+        # is expressed with markup below
+        keep = {k: v for k, v in inline.items() if k in (
+            'line-height', 'font-size', 'font-family', 'page-break-before',
+            'page-break-after', 'break-before', 'break-after')}
+        align = computed.get('text-align', '')
+        if tag in _ALIGNABLE_TAGS and align in ('center', 'right', 'justify'):
+            keep['text-align'] = align
+        if keep:
+            elem.set('style', '; '.join(f'{k}: {v}' for k, v in keep.items()))
+        elif 'style' in elem.attrib:
+            del elem.attrib['style']
+
+        own = _TAG_FORMATTING.get(tag)
+        if own:
+            applied = applied | {own}
+        is_block = tag in _BLOCK_TAGS
+        has_block_children = is_block and any(_local(d.tag) in _BLOCK_TAGS for d in elem.iterdescendants())
+        if not has_block_children and tag not in ('img', 'br', 'hr', 'table', 'tr', 'ul', 'ol', 'dl'):
+            want = set()
+            if _is_bold(computed.get('font-weight')):
+                want.add('b')
+            if computed.get('font-style') in ('italic', 'oblique'):
+                want.add('i')
+            deco = computed.get('text-decoration', '')
+            if 'underline' in deco:
+                want.add('u')
+            if 'line-through' in deco:
+                want.add('s')
+            color = _css_color(computed['color']) if computed.get('color') else None
+            if color and tag != 'a' and f'color:{color}' not in applied:
+                want.add(f'color:{color}')
+            va = decl.get('vertical-align', '').lower()
+            if not is_block and va in ('super', 'sub') and tag not in ('sup', 'sub'):
+                want.add(va[:3])
+            new = want - applied
+            if new and (elem.text or len(elem)):
+                for fmt in sorted(new):
+                    if fmt.startswith('color:'):
+                        _wrap_content(elem, 'font', color=fmt[6:])
+                    else:
+                        _wrap_content(elem, fmt)
+                applied = applied | new
+        for child in list(elem):
+            if isinstance(child.tag, str):
+                walk(child, computed, applied)
+
+    walk(body, {}, frozenset())
+    return etree.tostring(root, encoding='unicode')
+
+
 def _extract_inline_style_attrs(html_content):
     """
     Convert useful inline CSS styles to fpdf2-compatible HTML attributes.
@@ -420,46 +606,48 @@ def _clean_html_for_fpdf2(html_content):
             rf'</?{tag}[^>]*>', '', html_content, flags=re.IGNORECASE)
 
     def _clean_table_cell(m):
+        # fpdf2 renders the content of a cell as a single run of text: any
+        # markup that splits the text (<br>, partial formatting, links) makes
+        # it reject the whole document. Keep the text, and the formatting only
+        # when it applies to the entire cell.
         open_tag, content, close_tag = m.group(1), m.group(2), m.group(3)
+        text = re.sub(r'<br\b[^>]*>', ' ', content, flags=re.IGNORECASE)
+        text = re.sub(r'<[^>]+>', '', text)
+        text = re.sub(r'\s+', ' ', text).strip()
+        if not text:
+            return f'{open_tag}{close_tag}'
+        wrappers = []
+        inner = content.strip()
+        while True:
+            fm = re.match(r'^<(b|strong|i|em|u)\b[^>]*>(.*)</\1>$', inner, flags=re.DOTALL | re.IGNORECASE)
+            if fm is None or re.search(rf'</{fm.group(1)}>', fm.group(2), flags=re.IGNORECASE):
+                break
+            wrappers.append({'strong': 'b', 'em': 'i'}.get(fm.group(1).lower(), fm.group(1).lower()))
+            inner = fm.group(2).strip()
+        for w in reversed(wrappers):
+            text = f'<{w}>{text}</{w}>'
+        return f'{open_tag}{text}{close_tag}'
 
-        allowed_cell_tags = re.compile(
-            r'</?(?:b|i|u|s|font|sup|sub|br|a)\b[^>]*>', re.IGNORECASE)
-
-        parts = []
-        last_end = 0
-        for tag_match in re.finditer(r'<[^>]+>', content):
-            parts.append(content[last_end:tag_match.start()])
-            if allowed_cell_tags.match(tag_match.group(0)):
-                parts.append(tag_match.group(0))
-            else:
-                parts.append(' ')
-            last_end = tag_match.end()
-        parts.append(content[last_end:])
-        cleaned = ''.join(parts)
-        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-        return f'{open_tag}{cleaned}{close_tag}'
+    html_content = re.sub(r'(<ul\b[^>]*?)\s+type="[^"]*"', r'\1', html_content, flags=re.IGNORECASE)
 
     html_content = re.sub(
         r'(<t[dh][^>]*>)(.*?)(</t[dh]>)',
         _clean_table_cell, html_content, flags=re.DOTALL | re.IGNORECASE)
 
+    # The PDF core fonts are used with the WinAnsi (windows-1252) encoding,
+    # map the characters it does not contain to close equivalents
     _unicode_map = {
-        '\u2018': "\u0027", '\u2019': "\u0027",  
-        '\u201c': '"', '\u201d': '"',              
-        '\u2013': '\u002d', '\u2014': '\u002d\u002d',  
-        '\u2026': '...', '\u00a0': ' ',            
-        '\u2022': '\u00b7',  
-        '\u2032': "\u0027", '\u2033': '"',         
-        '\u2039': '\u00ab', '\u203a': '\u00bb',    
-        '\u200b': '', '\u200c': '', '\u200d': '',  
-        '\ufeff': '',  
-        '\u2010': '-', '\u2011': '-', '\u2012': '-',  
-        '\u2015': '\u002d\u002d',  
-        '\u2212': '-',  
-        '\u00ad': '',   
-        '\u2002': ' ', '\u2003': ' ', '\u2009': ' ',  
-        '\u2122': '(TM)',  
-        '\u2116': 'No.',   
+        '\u00a0': ' ',
+        '\u2032': "\u0027", '\u2033': '"',
+        '\u200b': '', '\u200c': '', '\u200d': '', '\u2060': '',
+        '\ufeff': '',
+        '\u2010': '-', '\u2011': '-', '\u2012': '\u2013',
+        '\u2015': '\u2014',
+        '\u2212': '-',
+        '\u00ad': '',
+        '\u2002': ' ', '\u2003': ' ', '\u2009': ' ', '\u202f': ' ', '\u2007': ' ', '\u2008': ' ',
+        '\u2116': 'No.',
+        '\u201b': '\u2018', '\u201f': '\u201c', '\u2024': '.', '\u2043': '-',
     }
     for uc, asc in _unicode_map.items():
         html_content = html_content.replace(uc, asc)
@@ -467,7 +655,7 @@ def _clean_html_for_fpdf2(html_content):
     cleaned = []
     for ch in html_content:
         try:
-            ch.encode('latin-1')
+            ch.encode('cp1252')
             cleaned.append(ch)
         except UnicodeEncodeError:
 
@@ -486,7 +674,7 @@ def _clean_html_for_fpdf2(html_content):
                 else:
 
                     decomposed = unicodedata.normalize('NFKD', ch)
-                    ascii_chars = decomposed.encode('latin-1', 'ignore').decode('latin-1')
+                    ascii_chars = decomposed.encode('cp1252', 'ignore').decode('cp1252')
                     cleaned.append(ascii_chars if ascii_chars else '?')
             except Exception:
                 cleaned.append('?')
@@ -586,6 +774,9 @@ def convert(opf_path, opts, metadata=None, output_path=None,
     margin_l, margin_t, margin_r, margin_b = _get_margins_mm(opts)
 
     pdf = FPDF(unit='mm', format=(page_w_mm, page_h_mm))
+    # The core fonts are embedded with WinAnsiEncoding, which gives access to
+    # typographic quotes, dashes, ellipsis, etc. that latin-1 does not have
+    pdf.core_fonts_encoding = 'windows-1252'
     pdf.set_margins(margin_l, margin_t, margin_r)
     pdf.set_auto_page_break(True, margin=margin_b)
 
@@ -614,6 +805,8 @@ def convert(opf_path, opts, metadata=None, output_path=None,
     if font_size:
 
         font_size = max(8, int(font_size * 0.75))
+
+    tag_styles = _tag_styles(font_size)
 
     if cover_data:
         try:
@@ -644,6 +837,7 @@ def convert(opf_path, opts, metadata=None, output_path=None,
 
             html_dir = os.path.dirname(html_path)
             avail_w_pt = (page_w_mm - margin_l - margin_r) * 72.0 / 25.4
+            html_content = _apply_css_styles(html_content, html_dir)
             html_content = _inject_image_dimensions(
                 html_content, html_dir, avail_w_pt)
 
@@ -661,7 +855,8 @@ def convert(opf_path, opts, metadata=None, output_path=None,
 
             pdf.set_font(font_family, size=font_size)
             try:
-                pdf.write_html(html_content)
+                pdf.write_html(html_content, tag_styles=tag_styles, li_prefix_color=(0, 0, 0),
+                               ul_bullet_char='\u2022')
             except Exception as e:
                 if log:
                     log.warn(f'fpdf2 write_html failed for {os.path.basename(html_path)}: {e}')
@@ -691,6 +886,19 @@ def convert(opf_path, opts, metadata=None, output_path=None,
 
     if report_progress:
         report_progress(1.0, 'Done')
+
+def _tag_styles(font_size):
+    '''
+    Styles for fpdf2's HTML renderer matching the default stylesheet of web
+    browsers (black bold headings sized relative to the base font), instead
+    of the fpdf2 defaults (dark red headings and quotes).
+    '''
+    from fpdf.fonts import TextStyle
+    scale = {'h1': 2.0, 'h2': 1.5, 'h3': 1.17, 'h4': 1.0, 'h5': 0.83, 'h6': 0.67}
+    ans = {h: TextStyle(font_style='B', color='#000000', font_size_pt=round(font_size * k, 1))
+           for h, k in scale.items()}
+    ans['blockquote'] = TextStyle(color='#000000', t_margin=3, b_margin=3, l_margin=10)
+    return ans
 
 def _add_cover_page(pdf, cover_data, page_w_mm, page_h_mm,
                     margin_l, margin_t, preserve_aspect):

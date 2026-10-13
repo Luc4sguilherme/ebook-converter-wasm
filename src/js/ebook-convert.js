@@ -17,6 +17,22 @@
 
 const PYODIDE_CDN = 'https://cdn.jsdelivr.net/pyodide/v0.26.1/full/';
 
+// Packages shipped with the Pyodide distribution
+const PYODIDE_PACKAGES = [
+    'micropip', 'Pillow', 'packaging', 'python-dateutil', 'msgpack', 'regex',
+    'lxml', 'beautifulsoup4', 'html5lib', 'fonttools',
+];
+
+// Packages installed from PyPI with micropip
+const PYPI_PACKAGES = [
+    'css-parser==1.0.10',
+    'html2text==2025.4.15',
+    'chardet==5.2.0',
+    'defusedxml==0.7.1',
+    'fpdf2==2.8.7',
+    'markdown==3.7',
+];
+
 /**
  * @typedef {Object} ConvertOptions
  * @property {string}  [title]           - Override book title
@@ -24,7 +40,7 @@ const PYODIDE_CDN = 'https://cdn.jsdelivr.net/pyodide/v0.26.1/full/';
  * @property {string}  [language]        - Override book language
  * @property {number}  [base_font_size]  - Base font size in pt
  * @property {string}  [output_profile]  - Output profile (e.g. 'kindle', 'tablet')
- * @property {boolean} [no_images]       - Strip images from output
+ * @property {boolean} [no_images]       - PDF input only: ignore images
  * @property {boolean} [linearize_tables]- Linearize tables in output
  * @property {string}  [extra_css]       - Extra CSS to inject
  */
@@ -67,15 +83,20 @@ export class EbookConverter {
         report('native', 100);
 
         report('packages', 0);
-        await this._pyodide.loadPackage(['micropip', 'Pillow', 'packaging', 'python-dateutil', 'msgpack', 'regex']);
-        console.log('Loaded Pillow, micropip, packaging, python-dateutil, msgpack');
+        await this._pyodide.loadPackage(PYODIDE_PACKAGES);
+        report('packages', 50);
 
+        // Pure Python packages that are not part of the Pyodide distribution.
+        // Versions are pinned so that a new upstream release cannot break
+        // conversions (fpdf2 >= 2.8.8 imports urllib.request.HTTPSHandler,
+        // which does not exist in Pyodide).
+        this._pyodide.globals.set('_calibre_pypi_packages', PYPI_PACKAGES);
         await this._pyodide.runPythonAsync(`
 import micropip
-await micropip.install(['css-parser', 'lxml', 'beautifulsoup4', 'html2text', 'chardet', 'defusedxml', 'cssselect', 'fpdf2'])
-print('Loaded css-parser, lxml, beautifulsoup4, html2text, defusedxml, fpdf2 via micropip')
+await micropip.install(list(_calibre_pypi_packages))
+del _calibre_pypi_packages
 `);
-        report('packages', 50);
+        report('packages', 100);
 
         report('calibre', 0);
         await this._loadCalibrePython();
@@ -96,9 +117,8 @@ print('Loaded css-parser, lxml, beautifulsoup4, html2text, defusedxml, fpdf2 via
         if (!this._ready) {
             throw new Error('EbookConverter not initialized. Call init() first.');
         }
-        const path = `/tmp/calibre-convert/${name}`;
-        const dir = path.substring(0, path.lastIndexOf('/'));
-        this._pyodide.runPython(`import os; os.makedirs('${dir}', exist_ok=True)`);
+        const path = this._vfsPath(name);
+        this._pyodide.FS.mkdirTree(path.substring(0, path.lastIndexOf('/')) || '/');
         this._pyodide.FS.writeFile(path, data);
     }
 
@@ -113,8 +133,7 @@ print('Loaded css-parser, lxml, beautifulsoup4, html2text, defusedxml, fpdf2 via
         if (!this._ready) {
             throw new Error('EbookConverter not initialized. Call init() first.');
         }
-        const path = name.startsWith('/') ? name : `/tmp/calibre-convert/${name}`;
-        return new Uint8Array(this._pyodide.FS.readFile(path));
+        return new Uint8Array(this._pyodide.FS.readFile(this._vfsPath(name)));
     }
 
     /**
@@ -125,9 +144,18 @@ print('Loaded css-parser, lxml, beautifulsoup4, html2text, defusedxml, fpdf2 via
      * Load the input file first with writeFile(), then call convert().
      * Retrieve the output with readFile().
      *
+     * Options use the names of ebook-convert's command line options, with
+     * either dashes or underscores (base_font_size or 'base-font-size').
+     * Values are converted to the type of the option, like the command line
+     * does, so strings such as '12' or 'true' are accepted.
+     *
+     * Output to .html produces a single self contained HTML file, with the
+     * stylesheet inlined and images embedded.
+     *
      * @param {string}         inputFile  - Input filename (previously loaded via writeFile)
      * @param {string}         outputFile - Output filename (format inferred from extension)
      * @param {ConvertOptions} [options]  - Conversion options
+     * @param {function}       [onProgress] - Callback: (fraction: number, message: string) => void
      * @returns {Promise<Uint8Array>}      - Raw bytes of the converted file
      */
     async convert(inputFile, outputFile, options = {}, onProgress) {
@@ -136,118 +164,76 @@ print('Loaded css-parser, lxml, beautifulsoup4, html2text, defusedxml, fpdf2 via
         }
 
         const py = this._pyodide;
-
-        if (typeof onProgress === 'function') {
-            globalThis._calibreProgressCallback = (frac, msg) => {
-                onProgress(frac, msg);
-            };
-        }
-
-        const inputPath = inputFile.startsWith('/')
-            ? inputFile
-            : `/tmp/calibre-convert/${inputFile}`;
-
-        const existsInVfs = py.runPython(
-            `import os; os.path.exists('${inputPath}')`
-        );
-        if (!existsInVfs) {
+        const inputPath = this._vfsPath(inputFile);
+        if (!py.FS.analyzePath(inputPath).exists) {
             throw new Error(
                 `File "${inputFile}" not found in VFS. ` +
                 `Use writeFile('${inputFile}', data) to load it first.`
             );
         }
 
-        const outputName = typeof outputFile === 'string' ? outputFile : String(outputFile);
-        const outputExt = outputName.match(/\.([^.]+)$/)?.[1]?.toLowerCase();
+        const outputName = String(outputFile);
+        const outputExt = outputName.match(/\.([^./]+)$/)?.[1]?.toLowerCase();
         if (!outputExt) {
             throw new Error('outputFile must have a file extension to determine output format');
         }
 
+        // HTML output is produced as HTMLZ and turned into a single file
         const needsHtmlExtract = outputExt === 'html' || outputExt === 'htm';
-        const actualExt = needsHtmlExtract ? 'htmlz' : outputExt;
-        const outputPath = outputName.startsWith('/')
-            ? (needsHtmlExtract ? outputName.replace(/\.(html|htm)$/i, '.htmlz') : outputName)
-            : `/tmp/calibre-convert/${outputName.replace(/\.[^.]+$/, '')}.${actualExt}`;
+        const userOutputPath = this._vfsPath(outputName);
+        const outputPath = needsHtmlExtract
+            ? userOutputPath.replace(/\.[^./]+$/, '.htmlz')
+            : userOutputPath;
+        py.FS.mkdirTree(outputPath.substring(0, outputPath.lastIndexOf('/')) || '/');
 
-        const outputDir = outputPath.substring(0, outputPath.lastIndexOf('/'));
-        py.runPython(`import os; os.makedirs('${outputDir}', exist_ok=True)`);
-
-        const optionsJson = JSON.stringify(options);
-        py.globals.set('_options_json', optionsJson);
-        py.runPython(`
-import json
-from ebook_convert_wasm import convert
-
-options = json.loads(_options_json) if _options_json else None
-convert('${inputPath}', '${outputPath}', options)
-`);
-
-        delete globalThis._calibreProgressCallback;
-
-        let outputData;
+        const wasm = py.pyimport('ebook_convert_wasm');
+        let pyOptions = null;
+        if (typeof onProgress === 'function') {
+            globalThis._calibreProgressCallback = (frac, msg) => {
+                onProgress(frac, msg);
+            };
+        }
         try {
-            outputData = py.FS.readFile(outputPath);
-        } catch (e) {
+            pyOptions = options && Object.keys(options).length ? py.toPy(options) : null;
+            wasm.convert(inputPath, outputPath, pyOptions);
 
-            const isDir = py.runPython(`
-import os
-os.path.isdir('${outputPath}')
-`);
-            if (isDir) {
-                const packed = py.runPython(`
-import zipfile, io, os
-buf = io.BytesIO()
-with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-    for root, dirs, files in os.walk('${outputPath}'):
-        for fname in files:
-            fpath = os.path.join(root, fname)
-            arcname = os.path.relpath(fpath, '${outputPath}')
-            zf.write(fpath, arcname)
-buf.getvalue()
-`);
-                outputData = new Uint8Array(packed.toJs());
-            } else {
+            let outputData;
+            const info = py.FS.analyzePath(outputPath);
+            if (!info.exists) {
                 throw new Error(`Conversion failed: output file not found at ${outputPath}`);
             }
-        }
-
-        if (needsHtmlExtract && outputData.length > 0) {
-            try {
-                const extracted = py.runPython(`
-import zipfile, io, os
-htmlz_path = '${outputPath}'
-result = b''
-with zipfile.ZipFile(htmlz_path, 'r') as zf:
-    # Look for the main HTML file inside the HTMLZ
-    html_names = [n for n in zf.namelist() if n.endswith(('.html', '.xhtml', '.htm'))]
-    if html_names:
-        # Prefer index.html, then any html file
-        target = next((n for n in html_names if 'index' in n.lower()), html_names[0])
-        result = zf.read(target)
-    else:
-        # Fallback: return raw htmlz
-        result = open(htmlz_path, 'rb').read()
-result
-`);
-                outputData = new Uint8Array(extracted.toJs());
-            } catch (extractErr) {
-
-                console.warn('Could not extract HTML from HTMLZ, returning raw output:', extractErr.message);
+            if (py.FS.isDir(info.object.mode)) {
+                // Formats such as OEB produce a directory, return it as a ZIP
+                const packed = wasm.pack_directory(outputPath);
+                outputData = packed.toJs();
+                packed.destroy();
+            } else if (needsHtmlExtract) {
+                const html = wasm.htmlz_to_html(outputPath);
+                outputData = html.toJs();
+                html.destroy();
+            } else {
+                outputData = py.FS.readFile(outputPath);
             }
+
+            const finalOutput = new Uint8Array(outputData);
+            if (userOutputPath !== outputPath) {
+                py.FS.writeFile(userOutputPath, finalOutput);
+            }
+            return finalOutput;
+        } finally {
+            delete globalThis._calibreProgressCallback;
+            if (pyOptions) pyOptions.destroy();
+            wasm.destroy();
         }
+    }
 
-        const finalOutput = new Uint8Array(outputData);
-
-        const userOutputPath = outputFile.startsWith('/')
-            ? outputFile
-            : `/tmp/calibre-convert/${outputFile}`;
-        if (userOutputPath !== outputPath) {
-            const outDir = userOutputPath.substring(0, userOutputPath.lastIndexOf('/'));
-            py.runPython(`import os; os.makedirs('${outDir}', exist_ok=True)`);
-            py.FS.writeFile(userOutputPath, finalOutput);
-        }
-
-        return finalOutput;
+    /**
+     * Resolve a filename to its path in the virtual filesystem.
+     * @private
+     */
+    _vfsPath(name) {
+        name = String(name);
+        return name.startsWith('/') ? name : `/tmp/calibre-convert/${name}`;
     }
 
     /**
@@ -1043,11 +1029,24 @@ _init_calibre_env()
     }
 }
 
-export async function convertEbook(inputData, inputName, outputFormat, options) {
-    const converter = new EbookConverter();
+/**
+ * Convenience function: initialize a converter, convert a single file and
+ * release the converter.
+ *
+ * @param {Uint8Array}     inputData    - Raw bytes of the input file
+ * @param {string}         inputName    - Input filename, its extension gives the input format
+ * @param {string}         outputFormat - Output format, e.g. 'epub'
+ * @param {ConvertOptions} [options]    - Conversion options
+ * @param {Object}         [config]     - Configuration for the EbookConverter constructor
+ * @returns {Promise<Uint8Array>}        - Raw bytes of the converted file
+ */
+export async function convertEbook(inputData, inputName, outputFormat, options = {}, config = {}) {
+    const converter = new EbookConverter(config);
     await converter.init();
     try {
-        return await converter.convert(inputData, inputName, outputFormat, options);
+        converter.writeFile(inputName, inputData);
+        const outputName = `${inputName.replace(/\.[^./]+$/, '')}.${String(outputFormat).replace(/^\./, '')}`;
+        return await converter.convert(inputName, outputName, options);
     } finally {
         await converter.destroy();
     }
